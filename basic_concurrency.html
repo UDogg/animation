@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Concurrency Animation</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            background-color: #f4f4f4;
+        }
+        canvas {
+            background-color: white;
+            display: block;
+            margin: 20px auto;
+            border: 1px solid black;
+        }
+        .controls {
+            margin-top: 20px;
+        }
+        button {
+            font-size: 16px;
+            padding: 10px;
+            margin: 5px;
+            cursor: pointer;
+        }
+        input[type="range"], input[type="number"] {
+            width: 100px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Concurrency in Systems Programming</h1>
+    <p>This animation demonstrates how multiple threads execute across multiple CPU cores.</p>
+
+    <!-- Canvas for animation -->
+    <canvas id="concurrencyCanvas" width="800" height="400"></canvas>
+
+    <!-- Controls -->
+    <div class="controls">
+        <button id="prevStepBtn">⏮ Step Back</button>
+        <button id="playPauseBtn">Pause</button>
+        <button id="nextStepBtn">⏭ Step Forward</button>
+        <br><br>
+        <label for="speedControl">Speed:</label>
+        <input type="range" id="speedControl" min="100" max="2000" value="500" step="100">
+        <span id="speedValue">500ms</span>
+        <br><br>
+        <label for="threadCount">Threads:</label>
+        <input type="number" id="threadCount" min="1" max="10" value="4">
+        <button id="updateThreadsBtn">Update Threads</button>
+        <br><br>
+        <label for="cpuCores">CPU Cores:</label>
+        <input type="number" id="cpuCores" min="1" max="4" value="2">
+        <button id="updateCoresBtn">Update Cores</button>
+        <br><br>
+        <p>Elapsed Time: <span id="elapsedTime">0</span> seconds</p>
+        <br>
+        <button id="saveStateBtn">💾 Save Execution State</button>
+        <button id="loadStateBtn">📂 Load Execution State</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById("concurrencyCanvas");
+        const ctx = canvas.getContext("2d");
+
+        let numThreads = 4;
+        let numCores = 2;
+        let timelineLength = 10;
+        const threadColors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"];
+        let threadHeight = canvas.height / numThreads;
+        let currentTime = 0;
+        let animationRunning = true;
+        let speed = 500;
+        let elapsedSeconds = 0;
+
+        // Generate and store execution states between loops
+        let executionStates = [];
+        function generateExecutionStates() {
+            executionStates = [];
+            for (let i = 0; i < numThreads; i++) {
+                executionStates.push(Array.from({length: timelineLength}, () => Math.random() > 0.5 ? 1 : 0));
+            }
+        }
+        generateExecutionStates();
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            let coreHeight = canvas.height / numCores;
+
+            // Draw CPU cores
+            for (let core = 0; core < numCores; core++) {
+                ctx.fillStyle = "#ccc";
+                ctx.fillRect(0, core * coreHeight, canvas.width, 2);
+                ctx.fillStyle = "black";
+                ctx.font = "14px Arial";
+                ctx.fillText(`Core ${core + 1}`, 10, (core + 1) * coreHeight - 10);
+            }
+
+            // Assign threads to cores dynamically
+            for (let thread = 0; thread < numThreads; thread++) {
+                let assignedCore = thread % numCores;
+                let baseY = assignedCore * coreHeight + (threadHeight / 2);
+
+                for (let time = 0; time < currentTime; time++) {
+                    let state = executionStates[thread][time];
+                    ctx.fillStyle = state ? threadColors[thread % threadColors.length] : "#ddd";
+                    ctx.fillRect(time * (canvas.width / timelineLength), baseY, canvas.width / timelineLength, threadHeight - 5);
+                }
+
+                ctx.fillStyle = "black";
+                ctx.fillText(`Thread ${thread + 1}`, 10, baseY + threadHeight / 2 - 10);
+            }
+
+            currentTime++;
+            if (currentTime > timelineLength) {
+                currentTime = 0;
+                elapsedSeconds = 0;
+            }
+
+            document.getElementById("elapsedTime").textContent = elapsedSeconds;
+
+            if (animationRunning) {
+                setTimeout(draw, speed);
+            }
+        }
+
+        draw();
+
+        document.getElementById("playPauseBtn").addEventListener("click", function() {
+            animationRunning = !animationRunning;
+            this.textContent = animationRunning ? "Pause" : "Play";
+            if (animationRunning) {
+                draw();
+            }
+        });
+
+        document.getElementById("speedControl").addEventListener("input", function() {
+            speed = this.value;
+            document.getElementById("speedValue").textContent = `${speed}ms`;
+        });
+
+        document.getElementById("nextStepBtn").addEventListener("click", function() {
+            if (currentTime < timelineLength) {
+                currentTime++;
+                draw();
+            }
+        });
+
+        document.getElementById("prevStepBtn").addEventListener("click", function() {
+            if (currentTime > 0) {
+                currentTime--;
+                draw();
+            }
+        });
+
+        document.getElementById("updateThreadsBtn").addEventListener("click", function() {
+            numThreads = parseInt(document.getElementById("threadCount").value);
+            threadHeight = canvas.height / numThreads;
+            generateExecutionStates();
+            currentTime = 0;
+            elapsedSeconds = 0;
+            draw();
+        });
+
+        document.getElementById("updateCoresBtn").addEventListener("click", function() {
+            numCores = parseInt(document.getElementById("cpuCores").value);
+            draw();
+        });
+
+        document.getElementById("saveStateBtn").addEventListener("click", function() {
+            localStorage.setItem("executionStates", JSON.stringify(executionStates));
+            localStorage.setItem("numThreads", numThreads);
+            localStorage.setItem("numCores", numCores);
+            alert("Execution state saved!");
+        });
+
+        document.getElementById("loadStateBtn").addEventListener("click", function() {
+            let savedStates = localStorage.getItem("executionStates");
+            if (savedStates) {
+                executionStates = JSON.parse(savedStates);
+                numThreads = parseInt(localStorage.getItem("numThreads"));
+                numCores = parseInt(localStorage.getItem("numCores"));
+                threadHeight = canvas.height / numThreads;
+                draw();
+                alert("Execution state loaded!");
+            } else {
+                alert("No saved state found!");
+            }
+        });
+
+        setInterval(() => {
+            if (animationRunning) {
+                elapsedSeconds++;
+                document.getElementById("elapsedTime").textContent = elapsedSeconds;
+            }
+        }, 1000);
+
+    </script>
+
+</body>
+</html>
+

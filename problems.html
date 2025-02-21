@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Unified Concurrency Simulation with Step Counter</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      background-color: #f4f4f4;
+    }
+    canvas {
+      background-color: white;
+      display: block;
+      margin: 20px auto;
+      border: 1px solid black;
+    }
+    .controls {
+      margin-top: 20px;
+    }
+    button {
+      font-size: 16px;
+      padding: 10px;
+      margin: 5px;
+      cursor: pointer;
+    }
+    input[type="range"] {
+      width: 200px;
+    }
+    #explanation {
+      margin-top: 20px;
+      font-size: 16px;
+      max-width: 600px;
+      margin-left: auto;
+      margin-right: auto;
+      background: #fff;
+      padding: 10px;
+      border: 1px solid #ccc;
+    }
+  </style>
+</head>
+<body>
+  <h1>Unified Concurrency Simulation</h1>
+  <p>
+    This animation uses a single timeline to show normal thread execution (steps 1–10),
+    a race condition between Threads 1 & 2 (steps 11–20), and a deadlock between Threads 3 & 4 (steps 21–30).
+  </p>
+
+  <!-- Canvas for animation -->
+  <canvas id="concurrencyCanvas" width="600" height="300"></canvas>
+
+  <!-- Controls -->
+  <div class="controls">
+    <button id="playPauseBtn">Pause</button>
+    <label for="speedControl">Speed:</label>
+    <input type="range" id="speedControl" min="100" max="2000" value="500" step="100">
+    <span id="speedValue">500ms</span>
+  </div>
+
+  <!-- Explanation text -->
+  <div id="explanation">
+    <strong>Explanation:</strong>
+    <br>
+    <em>Normal Execution (Steps 1–10):</em> Each row is a thread; colored blocks show when the thread is active.
+    <br>
+    <em>Race Condition (Steps 11–20):</em> Threads 1 & 2 concurrently update a shared variable.
+    <br>
+    <em>Deadlock (Steps 21–30):</em> Threads 3 & 4 are waiting for each other's locks.
+  </div>
+
+  <script>
+    const canvas = document.getElementById("concurrencyCanvas");
+    const ctx = canvas.getContext("2d");
+
+    // Global settings
+    let animationRunning = true;
+    let speed = 500; // milliseconds per frame
+    let currentTime = 1; // starting at step 1
+    const timelineLength = 30; // total steps in one simulation cycle
+
+    // Thread configuration
+    const numThreads = 4;
+    const threadColors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"];
+    const threadHeight = canvas.height / numThreads;
+
+    // Build a 2D array (one array per thread) for execution states.
+    // Each cell is 1 (active) or 0 (inactive).
+    let executionStates = [];
+    function generateExecutionStates() {
+      executionStates = [];
+      for (let i = 0; i < numThreads; i++) {
+        // Create random activity for the entire timeline.
+        let states = Array.from({ length: timelineLength }, () => (Math.random() > 0.5 ? 1 : 0));
+        executionStates.push(states);
+      }
+      // For Race Condition (steps 11–20) for Threads 1 and 2 (indices 0 and 1): force activity.
+      for (let t = 10; t < 20; t++) { // index 10 corresponds to step 11
+        executionStates[0][t] = 1;
+        executionStates[1][t] = 1;
+      }
+      // For Deadlock (steps 21–30) for Threads 3 and 4 (indices 2 and 3): force activity.
+      for (let t = 20; t < 30; t++) { // index 20 corresponds to step 21
+        executionStates[2][t] = 1;
+        executionStates[3][t] = 1;
+      }
+    }
+    generateExecutionStates();
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Draw the execution timeline for each thread up to the current step.
+      for (let thread = 0; thread < numThreads; thread++) {
+        for (let t = 0; t < currentTime; t++) {
+          let state = executionStates[thread][t];
+          ctx.fillStyle = state ? threadColors[thread] : "#ddd";
+          ctx.fillRect(
+            t * (canvas.width / timelineLength),
+            thread * threadHeight,
+            canvas.width / timelineLength,
+            threadHeight - 5
+          );
+        }
+        // Label each thread.
+        ctx.fillStyle = "black";
+        ctx.font = "14px Arial";
+        ctx.fillText(`Thread ${thread + 1}`, 10, (thread + 1) * threadHeight - 10);
+      }
+
+      // --- Overlay for Race Condition (Steps 11–20) ---
+      if (currentTime >= 11 && currentTime <= 20) {
+        // Draw a shared counter box at the top center.
+        const counterX = canvas.width / 2 - 40,
+              counterY = 10,
+              counterW = 80,
+              counterH = 40;
+        ctx.fillStyle = "#eee";
+        ctx.fillRect(counterX, counterY, counterW, counterH);
+        ctx.strokeStyle = "black";
+        ctx.strokeRect(counterX, counterY, counterW, counterH);
+        ctx.fillStyle = "black";
+        ctx.font = "14px Arial";
+        ctx.fillText("Shared", counterX + 10, counterY + 15);
+        ctx.fillText("Counter", counterX + 5, counterY + 30);
+
+        // Calculate the x-position of the current timeline block.
+        const blockWidth = canvas.width / timelineLength;
+        const currentBlockX = (currentTime - 0.5) * blockWidth;
+        // Determine vertical centers for Threads 1 and 2.
+        const thread1Y = threadHeight / 2;
+        const thread2Y = threadHeight + threadHeight / 2;
+        const counterCenterX = counterX + counterW / 2,
+              counterCenterY = counterY + counterH / 2;
+
+        ctx.strokeStyle = "green";
+        ctx.lineWidth = 2;
+        // Arrow from Thread 1 block to the shared counter.
+        ctx.beginPath();
+        ctx.moveTo(currentBlockX, thread1Y);
+        ctx.lineTo(counterCenterX, counterCenterY);
+        ctx.stroke();
+        // Arrow from Thread 2 block to the shared counter.
+        ctx.beginPath();
+        ctx.moveTo(currentBlockX, thread2Y);
+        ctx.lineTo(counterCenterX, counterCenterY);
+        ctx.stroke();
+
+        // Explanatory text for the race condition.
+        ctx.fillStyle = "green";
+        ctx.font = "16px Arial";
+        ctx.fillText(
+          "Race Condition: Threads 1 & 2 concurrently update a shared variable",
+          canvas.width / 2 - 200,
+          canvas.height - 30
+        );
+      }
+
+      // --- Overlay for Deadlock (Steps 21–30) ---
+      if (currentTime >= 21 && currentTime <= 30) {
+        // For Threads 3 and 4 (indices 2 and 3), draw arrows to indicate waiting.
+        const blockWidth = canvas.width / timelineLength;
+        const currentBlockX = (currentTime - 0.5) * blockWidth;
+        const thread3Y = 2 * threadHeight + threadHeight / 2;
+        const thread4Y = 3 * threadHeight + threadHeight / 2;
+
+        ctx.strokeStyle = "red";
+        ctx.lineWidth = 2;
+        // Arrow from Thread 3's block to Thread 4's block.
+        ctx.beginPath();
+        ctx.moveTo(currentBlockX, thread3Y);
+        ctx.lineTo(currentBlockX, thread4Y);
+        ctx.stroke();
+        // Arrow from Thread 4's block to Thread 3's block.
+        ctx.beginPath();
+        ctx.moveTo(currentBlockX, thread4Y);
+        ctx.lineTo(currentBlockX, thread3Y);
+        ctx.stroke();
+
+        // Explanatory text for the deadlock.
+        ctx.fillStyle = "black";
+        ctx.font = "16px Arial";
+        ctx.fillText(
+          "Deadlock: Threads 3 & 4 are waiting for each other's locks",
+          canvas.width / 2 - 200,
+          canvas.height - 50
+        );
+      }
+
+      // --- Draw the Step Counter ---
+      ctx.fillStyle = "black";
+      ctx.font = "16px Arial";
+      ctx.fillText("Step: " + currentTime, canvas.width - 100, 20);
+
+      // Advance the timeline.
+      currentTime++;
+      if (currentTime > timelineLength) {
+        currentTime = 1;
+        generateExecutionStates();
+      }
+
+      if (animationRunning) {
+        setTimeout(draw, speed);
+      }
+    }
+    draw();
+
+    // --- Controls ---
+    document.getElementById("playPauseBtn").addEventListener("click", function () {
+      animationRunning = !animationRunning;
+      this.textContent = animationRunning ? "Pause" : "Play";
+      if (animationRunning) {
+        draw();
+      }
+    });
+
+    document.getElementById("speedControl").addEventListener("input", function () {
+      speed = this.value;
+      document.getElementById("speedValue").textContent = `${speed}ms`;
+    });
+  </script>
+  
+</body>
+</html>
