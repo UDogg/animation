@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Concurrency Visualization with GSAP (Staggered Tasks) and Critical Section</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin: 20px;
+      height: 100vh;
+      justify-content: center;
+      background-color: #f7f7f7;
+    }
+    #queue {
+      display: flex;
+      margin-bottom: 20px;
+    }
+    #cores {
+      display: flex;
+      margin-top: 200px; /* Move cores halfway down */
+    }
+    .thread {
+      width: 30px;
+      height: 30px;
+      margin: 0 5px;
+      border-radius: 50%;
+      background-color: #3498db;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 14px;
+      position: absolute; /* Position for smooth animation */
+    }
+    .core {
+      width: 60px;
+      height: 60px;
+      margin: 0 10px;
+      border-radius: 10px;
+      background-color: #2ecc71;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 16px;
+      position: relative;
+    }
+    #lockStatus, #phaseIndicator, #taskLog {
+      margin: 5px 0;
+      font-size: 16px;
+    }
+    #taskLog {
+      max-height: 150px;
+      overflow-y: auto;
+      width: 400px;
+      border: 1px solid #ccc;
+      padding: 10px;
+    }
+    /* Legend styling */
+    #legend {
+      position: fixed;
+      bottom: 10px;
+      right: 10px;
+      border: 1px solid #ccc;
+      padding: 5px;
+      width: 300px;
+      background-color: #f9f9f9;
+    }
+    #legend h2 {
+      margin-top: 0;
+    }
+    #legend ul {
+      list-style-type: none;
+      padding-left: 0;
+    }
+    #legend li {
+      margin-bottom: 5px;
+    }
+    canvas {
+      border: 1px solid #ccc;
+      display: block;
+      margin: 20px auto;
+      background-color: #fff;
+    }
+  </style>
+  <!-- Include GSAP Library -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.10.4/gsap.min.js"></script>
+</head>
+<body>
+  <h1>Concurrency Visualization (Staggered)</h1>
+  <div id="queue"></div>
+  <div id="cores"></div>
+  <div id="lockStatus">Lock Status: Unlocked</div>
+  <div id="phaseIndicator">Phase: Idle</div>
+  <div id="taskLog">Task Completion Log:</div>
+
+  <!-- Legend for easy lookup -->
+  <div id="legend">
+    <h2>Legend</h2>
+    <ul>
+      <li><strong>Lock Status: Locked</strong> - At least one task is running.</li>
+      <li><strong>Lock Status: Unlocked</strong> - No tasks are running.</li>
+      <li><strong>Phase: Idle</strong> - No tasks in the system (running or waiting).</li>
+      <li><strong>Phase: Growing</strong> - Some tasks are running and there are tasks waiting in the queue.</li>
+      <li><strong>Phase: At Capacity</strong> - All cores are busy with tasks.</li>
+      <li><strong>Phase: Overloaded</strong> - More tasks are running than there are cores available.</li>
+      <li><strong>Phase: Shrinking</strong> - Tasks are completing and the system is winding down.</li>
+    </ul>
+  </div>
+
+  <canvas id="concurrencyCanvas" width="900" height="700"></canvas>
+
+  <script>
+    // ------------------------
+    // CONFIGURATION CONSTANTS
+    // ------------------------
+    const numThreads = 20;       // Total number of tasks
+    const numCores = 4;         // Number of processing cores
+
+    // Speed/delays (try tweaking these!)
+    const TASK_MOVE_DURATION = 2; // Time to move from queue to core
+    const REMOVE_DURATION = 2;    // Time to fade out a completed task
+    const TASK_ENQUEUE_INTERVAL = 2500; // Add 1 new task every 2.5
+
+    // Random "completion delay" for each task (in milliseconds)
+    function getRandomCompleteDelay() {
+      return Math.floor(Math.random() * 4 + 2);
+    }
+
+    // Color change animation for "completion"
+    const COMPLETE_DURATION = 1; // Color change animation time
+
+    // ------------------------
+    // DOM ELEMENTS
+    // ------------------------
+    const queue = document.getElementById('queue');
+    const cores = document.getElementById('cores');
+    const lockStatus = document.getElementById('lockStatus');
+    const phaseIndicator = document.getElementById('phaseIndicator');
+    const taskLog = document.getElementById('taskLog');
+    const canvas = document.getElementById('concurrencyCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // Global shared lock and counter
+    let lockAcquired = false;
+    let sharedCounter = 0;
+
+    // Critical section dimensions
+    const csArea = { x: 300, y: 200, width: 300, height: 450 };
+
+    // Define track paths
+    const tracks = [
+      { startX: 0, startY: 250, endX: 900, endY: 250 },
+      { startX: 0, startY: 350, endX: 900, endY: 350 },
+      { startX: 0, startY: 450, endX: 900, endY: 450 },
+      { startX: 0, startY: 550, endX: 900, endY: 550 }
+    ];
+
+    // Define thread properties; each thread simulates a process
+    const threads = [
+      { id: 1, x: 0, y: 250, color: "#f39c12", state: "approaching", delay: 1000, timer: 0, startTime: null },
+      { id: 2, x: 0, y: 350, color: "#27ae60", state: "approaching", delay: 2000, timer: 0, startTime: null },
+      { id: 3, x: 0, y: 450, color: "#2980b9", state: "approaching", delay: 3000, timer: 0, startTime: null },
+      { id: 4, x: 0, y: 550, color: "#8e44ad", state: "approaching", delay: 4000, timer: 0, startTime: null }
+    ];
+
+    const threadSpeed = 2.1; // Speed of thread movement
+    const csTime = 1428.57; // Time spent in the critical section (in milliseconds)
+
+    let lastTimestamp = 0;
+
+    // ------------------------
+    // STATE VARIABLES
+    // ------------------------
+    let activeThreads = 0; // Tracks how many tasks are running
+    let taskCounter = 1;   // Task numbering
+    let coreAvailability = Array(numCores).fill(true); // If core i is free
+    let waitingQueue = []; // Queue for waiting tasks
+
+    // Variables to ensure statuses are visible for at least 2 seconds
+    let lastLockUpdateTime = 0;
+    let currentLockStatus = "";
+    let lastPhaseUpdateTime = 0;
+    let currentPhase = "";
+
+    // ------------------------
+    // HELPER FUNCTIONS
+    // ------------------------
+    function formatTimestamp(date = new Date()) {
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      const seconds = String(date.getSeconds()).padStart(2, '0');
+      const milliseconds = String(date.getMilliseconds()).padStart(3, '0');
+      return `${hours}:${minutes}:${seconds}.${milliseconds}`;
+    }
+
+    // Function to draw tracks
+    function drawTracks() {
+      ctx.strokeStyle = "#cccccc"; // Light gray color for tracks
+      ctx.lineWidth = 2;
+      tracks.forEach(track => {
+        ctx.beginPath();
+        ctx.moveTo(track.startX, track.startY);
+        ctx.lineTo(track.endX, track.endY);
+        ctx.stroke();
+      });
+    }
+
+    function drawStatic() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Draw title
+      ctx.font = "24px Arial";
+      ctx.fillStyle = "#333";
+      ctx.fillText("Concurrency Animation: Threads & Critical Section", 150, 40);
+
+      // Draw tracks
+      drawTracks();
+
+      // Draw the critical section box
+      ctx.strokeStyle = lockAcquired ? "#d9534f" : "#007acc";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(csArea.x, csArea.y, csArea.width, csArea.height);
+      ctx.font = "18px Arial";
+      ctx.fillStyle = "#333";
+      ctx.fillText("Critical Section", csArea.x + 20, csArea.y + 30);
+      ctx.fillText("Shared Resource Access", csArea.x + 20, csArea.y + 60);
+
+      // Display the shared counter
+      ctx.font = "20px Arial";
+      ctx.fillText("Shared Counter: " + sharedCounter, 600, 50);
+    }
+
+    // Draw a thread (as a rectangle representing a train car)
+    function drawThread(thread) {
+      const carWidth = 40;
+      const carHeight = 20;
+      ctx.fillStyle = thread.color;
+      ctx.fillRect(thread.x - carWidth / 2, thread.y - carHeight / 2, carWidth, carHeight);
+      ctx.strokeStyle = "#333";
+      ctx.strokeRect(thread.x - carWidth / 2, thread.y - carHeight / 2, carWidth, carHeight);
+      ctx.font = "12px Arial";
+      ctx.fillStyle = "#333";
+      ctx.fillText("Thread " + thread.id, thread.x - carWidth / 2, thread.y - carHeight / 2 - 5);
+      ctx.fillText(thread.state, thread.x - carWidth / 2, thread.y + carHeight / 2 + 15);
+    }
+
+    // Reset threads to their initial state to enable an infinite loop
+    function resetThreads() {
+      threads.forEach((thread, index) => {
+        thread.x = 0;
+        thread.state = "approaching";
+        thread.timer = 0;
+        thread.startTime = null;
+      });
+      lockAcquired = false;
+    }
+
+    // ------------------------
+    // SAFE UPDATE FUNCTIONS
+    // ------------------------
+    function safeUpdateLockStatus(newStatus, newColor) {
+      const now = performance.now();
+      if (currentLockStatus !== newStatus) {
+        const elapsed = now - lastLockUpdateTime;
+        const delay = elapsed < 2000 ? 2000 - elapsed : 0;
+        setTimeout(() => {
+          lockStatus.textContent = `Lock Status: ${newStatus}`;
+          lockStatus.style.color = newColor;
+          currentLockStatus = newStatus;
+          lastLockUpdateTime = performance.now();
+        }, delay);
+      }
+    }
+
+    function safeUpdatePhaseIndicator(newPhase) {
+      const now = performance.now();
+      if (currentPhase !== newPhase) {
+        const elapsed = now - lastPhaseUpdateTime;
+        const delay = elapsed < 2000 ? 2000 - elapsed : 0;
+        setTimeout(() => {
+          phaseIndicator.textContent = `Phase: ${newPhase}`;
+          currentPhase = newPhase;
+          lastPhaseUpdateTime = performance.now();
+        }, delay);
+      }
+    }
+
+    // ------------------------
+    // CREATE CORES
+    // ------------------------
+    const coreElements = [];
+    for (let i = 1; i <= numCores; i++) {
+      const core = document.createElement('div');
+      core.classList.add('core');
+      core.textContent = `Core ${i}`;
+      cores.appendChild(core);
+      coreElements.push(core);
+    }
+
+    // ------------------------
+    // TASK CREATION
+    // ------------------------
+    function createThread() {
+      const thread = document.createElement('div');
+      thread.classList.add('thread');
+      thread.textContent = taskCounter++;
+      queue.appendChild(thread);
+      return thread;
+    }
+
+    // ------------------------
+    // CORE ASSIGNMENT + ANIMATION
+    // ------------------------
+    function assignTaskToCore(thread, coreIndex) {
+      const core = coreElements[coreIndex];
+      coreAvailability[coreIndex] = false; // Mark core as in use
+
+      const coreRect = core.getBoundingClientRect();
+      const queueRect = queue.getBoundingClientRect();
+
+      // Move from the queue to the core
+      gsap.to(thread, {
+        duration: TASK_MOVE_DURATION,
+        x: coreRect.left - queueRect.left,
+        y: coreRect.top - queueRect.top,
+        onStart: () => {
+          activeThreads++;
+          safeUpdateLockStatus("Locked", "red");
+          updatePhaseIndicator();
+          logTaskEvent(thread.textContent, `entered Core ${coreIndex + 1}`);
+        },
+        onComplete: () => {
+          // Once at the core, wait a random "completion delay"
+          const completeDelay = getRandomCompleteDelay();
+          gsap.to(thread, {
+            duration: COMPLETE_DURATION,
+            backgroundColor: '#e74c3c',
+            delay: completeDelay,  // Wait before 'completing'
+            onComplete: () => {
+              logTaskEvent(thread.textContent, `completed at Core ${coreIndex + 1}`);
+              // Fade out and remove the thread from the queue
+              gsap.to(thread, {
+                duration: REMOVE_DURATION,
+                x: 0,
+                y: 0,
+                opacity: 0,
+                onComplete: () => {
+                  queue.removeChild(thread);
+                  activeThreads--;
+                  coreAvailability[coreIndex] = true; // Free up core
+                  safeUpdateLockStatus(activeThreads > 0 ? "Locked" : "Unlocked", activeThreads > 0 ? "red" : "green");
+                  updatePhaseIndicator();
+                  processNextTask(); // Attempt to schedule next waiting task
+                }
+              });
+            }
+          });
+        }
+      });
+    }
+
+    // ------------------------
+    // SCHEDULING
+    // ------------------------
+    function processNextTask() {
+      for (let i = 0; i < numCores; i++) {
+        if (coreAvailability[i] && waitingQueue.length > 0) {
+          const nextThread = waitingQueue.shift();
+          assignTaskToCore(nextThread, i);
+        }
+      }
+      updatePhaseIndicator();
+    }
+
+    // Enqueue tasks one by one in an interval
+    const taskCreatorInterval = setInterval(() => {
+      if (taskCounter <= numThreads) {
+        const newThread = createThread();
+        waitingQueue.push(newThread);
+        processNextTask(); // Check if a core is available immediately
+      } else {
+        // No more tasks to add
+        clearInterval(taskCreatorInterval);
+      }
+    }, TASK_ENQUEUE_INTERVAL);
+
+    // ------------------------
+    // STATUS UPDATES
+    // ------------------------
+    function updateLockStatus() {
+      // Now using safeUpdateLockStatus
+      if (activeThreads > 0) {
+        safeUpdateLockStatus("Locked", "red");
+      } else {
+        safeUpdateLockStatus("Unlocked", "green");
+      }
+    }
+
+    function updatePhaseIndicator() {
+      // Determine phase based on activeThreads and waitingQueue
+      if (activeThreads === 0 && waitingQueue.length === 0) {
+        safeUpdatePhaseIndicator("Idle");
+      } else if (activeThreads < numCores && waitingQueue.length > 0) {
+        safeUpdatePhaseIndicator("Growing");
+      } else if (activeThreads === numCores) {
+        safeUpdatePhaseIndicator("At Capacity");
+      } else if (activeThreads > numCores) {
+        safeUpdatePhaseIndicator("Overloaded");
+      } else {
+        safeUpdatePhaseIndicator("Shrinking");
+      }
+    }
+
+    function logTaskEvent(task, event) {
+      const timestamp = formatTimestamp();
+      const logEntry = document.createElement('div');
+      logEntry.textContent = `Task ${task} ${event} at ${timestamp}`;
+      taskLog.appendChild(logEntry);
+      taskLog.scrollTop = taskLog.scrollHeight;
+    }
+
+    // Main animation loop using requestAnimationFrame
+    function animate(timestamp) {
+      if (!lastTimestamp) lastTimestamp = timestamp;
+      const deltaTime = timestamp - lastTimestamp;
+      lastTimestamp = timestamp;
+
+      drawStatic();
+      updateThreads(deltaTime);
+      threads.forEach(drawThread);
+
+      if (threads.every(thread => thread.state === "done")) {
+        resetThreads();
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    function updateThreads(deltaTime) {
+      threads.forEach(thread => {
+        if (performance.now() < thread.delay) return;
+
+        if (thread.state === "approaching") {
+          if (thread.x < csArea.x - 30) {
+            thread.x += threadSpeed;
+          } else {
+            if (!lockAcquired) {
+              lockAcquired = true;
+              thread.state = "inCS";
+              sharedCounter++;
+              thread.timer = 0;
+            } else {
+              thread.state = "waiting";
+            }
+          }
+        } else if (thread.state === "waiting") {
+          if (!lockAcquired) {
+            thread.state = "approaching";
+          }
+        } else if (thread.state === "inCS") {
+          thread.timer += deltaTime;
+          if (thread.timer >= csTime) {
+            thread.state = "exiting";
+            lockAcquired = false;
+          }
+        } else if (thread.state === "exiting") {
+          if (thread.x < canvas.width - 10) {
+            thread.x += threadSpeed;
+          } else {
+            thread.state = "done";
+          }
+        }
+      });
+    }
+
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>
